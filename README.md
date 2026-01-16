@@ -16,6 +16,7 @@ https://zhuanlan.zhihu.com/p/115187442 最后参照这个定时任务的设置�
 
 
 PS：不知道脚本什么时候失效（科研通更新接口就会失效了 失效了我会再补的）
-欢迎加群交流各类问题 群内会更新gemini/GPT 白嫖教程 不想麻烦的也可以跟群友低价拼车
+欢迎加群交流各类科研问题
+群内可以跟群友低价拼车GPT
 <img width="704" height="984" alt="image" src="https://github.com/user-attachments/assets/6991f4ee-0bde-4578-ac5a-26d35e1d7502" />
 
