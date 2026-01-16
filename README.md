@@ -16,4 +16,6 @@ https://zhuanlan.zhihu.com/p/115187442 最后参照这个定时任务的设置�
 
 
 PS：不知道脚本什么时候失效（科研通更新接口就会失效了 失效了我会再补的）
+如果有OpenSees的问题欢迎找我交流
 
+<img width="1207" height="1688" alt="2076dad4e279c375431fe429ee01316b" src="https://github.com/user-attachments/assets/c50b33b7-0537-4637-b30b-f84a3917666f" />
