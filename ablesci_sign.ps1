@@ -6,6 +6,7 @@ $cookiePath = Join-Path $ScriptDir "ablesci_cookie.txt"
 $logPath = Join-Path $ScriptDir "ablesci_sign.log"
 $url = "https://www.ablesci.com/user/sign"
 $syncScriptPath = Join-Path $ScriptDir "sync_ablesci_cookie_from_debug.py"
+$cookieSyncModeDefault = "on-demand"
 
 function Log {
   param(
@@ -125,6 +126,23 @@ function Invoke-CookieSync {
   return $false
 }
 
+function Get-CookieSyncMode {
+  $modeRaw = $env:ABLESCI_COOKIE_SYNC_MODE
+  if ([string]::IsNullOrWhiteSpace($modeRaw)) {
+    return $cookieSyncModeDefault
+  }
+
+  switch ($modeRaw.Trim().ToLowerInvariant()) {
+    "always" { return "always" }
+    "on-demand" { return "on-demand" }
+    "off" { return "off" }
+    default {
+      Log -Level "WARN" -Message "unknown ABLESCI_COOKIE_SYNC_MODE=$modeRaw; fallback to $cookieSyncModeDefault"
+      return $cookieSyncModeDefault
+    }
+  }
+}
+
 function Invoke-SignRequest {
   param([string]$CookieHeader)
 
@@ -166,10 +184,19 @@ function Invoke-SignRequest {
 }
 
 try {
-  # Attempt to refresh session cookies at each run so new-day sign state is discoverable.
-  [void](Invoke-CookieSync -Reason "pre-sign")
-
+  $syncMode = Get-CookieSyncMode
   $cookie = Get-CookieValue
+
+  if ($syncMode -eq "always") {
+    [void](Invoke-CookieSync -Reason "pre-sign(mode=always)")
+    $cookie = Get-CookieValue
+  } elseif (($syncMode -eq "on-demand") -and [string]::IsNullOrWhiteSpace($cookie)) {
+    [void](Invoke-CookieSync -Reason "pre-sign(mode=on-demand-empty-cookie)")
+    $cookie = Get-CookieValue
+  } elseif ($syncMode -eq "off") {
+    Log -Level "INFO" -Message "cookie sync disabled by ABLESCI_COOKIE_SYNC_MODE=off"
+  }
+
   if ([string]::IsNullOrWhiteSpace($cookie)) {
     Log -Level "ERROR" -Message "cookie file is empty: $cookiePath"
     exit 1
