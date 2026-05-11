@@ -6,6 +6,9 @@ $cookiePath = Join-Path $ScriptDir "ablesci_cookie.txt"
 $logPath = Join-Path $ScriptDir "ablesci_sign.log"
 $url = "https://www.ablesci.com/user/sign"
 $syncScriptPath = Join-Path $ScriptDir "sync_ablesci_cookie_from_debug.py"
+$ensureDebugChromeScriptPath = Join-Path $ScriptDir "ensure_ablesci_debug_chrome.ps1"
+$managedDebugProfileDir = Join-Path $ScriptDir "chrome-debug-profile"
+$managedDebugPortDefault = 9333
 $cookieSyncModeDefault = "on-demand"
 
 function Log {
@@ -78,8 +81,19 @@ function Invoke-CookieSync {
   }
   $args += @($syncScriptPath, "--output", $cookiePath)
 
-  if (![string]::IsNullOrWhiteSpace($env:ABLESCI_DEVTOOLS_ACTIVE_PORT)) {
-    $args += @("--active-port-file", $env:ABLESCI_DEVTOOLS_ACTIVE_PORT)
+  $debugSourceMode = Get-DebugSourceMode
+  if ($debugSourceMode -eq "off") {
+    Log -Level "WARN" -Message "debug source disabled by ABLESCI_DEBUG_SOURCE_MODE=off"
+    return $false
+  }
+
+  if ($debugSourceMode -eq "managed-chrome") {
+    [void](Ensure-ManagedDebugChrome)
+    $args += @("--debug-port", (Get-ManagedDebugPort))
+  } else {
+    if (![string]::IsNullOrWhiteSpace($env:ABLESCI_DEVTOOLS_ACTIVE_PORT)) {
+      $args += @("--active-port-file", $env:ABLESCI_DEVTOOLS_ACTIVE_PORT)
+    }
   }
 
   $syncOutput = @()
@@ -141,6 +155,54 @@ function Get-CookieSyncMode {
       return $cookieSyncModeDefault
     }
   }
+}
+
+function Get-DebugSourceMode {
+  $modeRaw = $env:ABLESCI_DEBUG_SOURCE_MODE
+  if ([string]::IsNullOrWhiteSpace($modeRaw)) {
+    return "managed-chrome"
+  }
+
+  switch ($modeRaw.Trim().ToLowerInvariant()) {
+    "managed-chrome" { return "managed-chrome" }
+    "session-setting" { return "session-setting" }
+    "off" { return "off" }
+    default {
+      Log -Level "WARN" -Message "unknown ABLESCI_DEBUG_SOURCE_MODE=$modeRaw; fallback to managed-chrome"
+      return "managed-chrome"
+    }
+  }
+}
+
+function Get-ManagedDebugPort {
+  if ($env:ABLESCI_MANAGED_DEBUG_PORT -match "^\d+$") {
+    return [int]$env:ABLESCI_MANAGED_DEBUG_PORT
+  }
+
+  return $managedDebugPortDefault
+}
+
+function Ensure-ManagedDebugChrome {
+  if (!(Test-Path -LiteralPath $ensureDebugChromeScriptPath)) {
+    Log -Level "WARN" -Message "managed debug script not found: $ensureDebugChromeScriptPath"
+    return $false
+  }
+
+  $managedDebugPort = Get-ManagedDebugPort
+  $ensureOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ensureDebugChromeScriptPath `
+    -ProfileDir $managedDebugProfileDir `
+    -Port $managedDebugPort `
+    -StartUrl "https://www.ablesci.com/" 2>&1
+  $ensureExit = $LASTEXITCODE
+  $ensureText = (($ensureOutput | ForEach-Object { "$_" }) -join " | ").Trim()
+
+  if ($ensureExit -eq 0) {
+    Log -Level "INFO" -Message "managed debug chrome ready. $ensureText"
+    return $true
+  }
+
+  Log -Level "WARN" -Message "managed debug chrome not ready. exit=$ensureExit output=$ensureText"
+  return $false
 }
 
 function Invoke-SignRequest {

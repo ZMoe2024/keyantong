@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from urllib.request import urlopen
 
 import websockets
 
@@ -34,7 +35,18 @@ def parse_args() -> argparse.Namespace:
         "--active-port-file",
         type=Path,
         default=DEFAULT_ACTIVE_PORT_PATH,
-        help="Path to Chrome DevToolsActivePort file.",
+        help="Path to Chrome DevToolsActivePort file (used when --debug-port is not provided).",
+    )
+    parser.add_argument(
+        "--debug-host",
+        default="127.0.0.1",
+        help="DevTools host when using --debug-port (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--debug-port",
+        type=int,
+        default=None,
+        help="DevTools fixed port (reads webSocketDebuggerUrl from /json/version).",
     )
     parser.add_argument(
         "--output",
@@ -66,6 +78,26 @@ def load_ws_url(active_port_file: Path) -> str:
     return f"ws://127.0.0.1:{port}{ws_path}"
 
 
+def load_ws_url_from_debug_port(debug_host: str, debug_port: int) -> str:
+    version_url = f"http://{debug_host}:{debug_port}/json/version"
+    try:
+        with urlopen(version_url, timeout=3) as resp:
+            content = resp.read().decode("utf-8")
+    except Exception as exc:
+        raise RuntimeError(f"Cannot read {version_url}: {exc}") from exc
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON from {version_url}: {exc}") from exc
+
+    ws_url = payload.get("webSocketDebuggerUrl")
+    if not ws_url or not isinstance(ws_url, str):
+        raise RuntimeError(f"webSocketDebuggerUrl missing in {version_url}")
+
+    return ws_url
+
+
 async def recv_for_id(ws: websockets.ClientConnection, wanted_id: int) -> dict:
     while True:
         msg = json.loads(await ws.recv())
@@ -88,15 +120,30 @@ def to_cookie_header(cookies: list[dict]) -> str:
     return "; ".join(f"{c['name']}={c['value']}" for c in ordered)
 
 
+def has_login_cookie(cookies: list[dict]) -> bool:
+    names = {str(c.get("name", "")).strip() for c in cookies}
+    # _identity-frontend is the stable authenticated cookie observed on AbleSci.
+    # advanced-frontend is a fallback session identifier.
+    return ("_identity-frontend" in names) or ("advanced-frontend" in names)
+
+
 def main() -> int:
     args = parse_args()
 
     try:
-        ws_url = load_ws_url(args.active_port_file)
+        if args.debug_port is not None:
+            ws_url = load_ws_url_from_debug_port(args.debug_host, args.debug_port)
+        else:
+            ws_url = load_ws_url(args.active_port_file)
         cookies = asyncio.run(pull_ablesci_cookies(ws_url))
         if not cookies:
             raise RuntimeError(
                 "No ablesci.com cookies found. Open https://www.ablesci.com/ and login first."
+            )
+        if not has_login_cookie(cookies):
+            raise RuntimeError(
+                "Found ablesci.com cookies but no login session cookie. "
+                "Please login at https://www.ablesci.com/ in the managed debug Chrome first."
             )
 
         cookie_header = to_cookie_header(cookies)
