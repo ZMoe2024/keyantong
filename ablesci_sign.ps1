@@ -7,9 +7,18 @@ $logPath = Join-Path $ScriptDir "ablesci_sign.log"
 $url = "https://www.ablesci.com/user/sign"
 $syncScriptPath = Join-Path $ScriptDir "sync_ablesci_cookie_from_debug.py"
 $ensureDebugChromeScriptPath = Join-Path $ScriptDir "ensure_ablesci_debug_chrome.ps1"
+$approvePromptScriptPath = Join-Path $ScriptDir "approve_remote_debug_prompt.py"
 $managedDebugProfileDir = Join-Path $ScriptDir "chrome-debug-profile"
 $managedDebugPortDefault = 9333
-$cookieSyncModeDefault = "on-demand"
+$cookieSyncModeDefault = "always"
+$ablesciHomeUrl = "https://www.ablesci.com/"
+$defaultVisitWaitSeconds = 6
+$defaultChromeUserDataDir = if (![string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+  Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data"
+} else {
+  Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Google\Chrome\User Data"
+}
+$defaultSessionActivePortFile = Join-Path $defaultChromeUserDataDir "DevToolsActivePort"
 
 function Log {
   param(
@@ -79,7 +88,12 @@ function Invoke-CookieSync {
   if ($launcher.Count -gt 1) {
     $args += $launcher[1..($launcher.Count - 1)]
   }
-  $args += @($syncScriptPath, "--output", $cookiePath)
+  $args += @(
+    $syncScriptPath,
+    "--output", $cookiePath,
+    "--visit-url", $ablesciHomeUrl,
+    "--visit-wait-seconds", $defaultVisitWaitSeconds
+  )
 
   $debugSourceMode = Get-DebugSourceMode
   if ($debugSourceMode -eq "off") {
@@ -91,8 +105,10 @@ function Invoke-CookieSync {
     [void](Ensure-ManagedDebugChrome)
     $args += @("--debug-port", (Get-ManagedDebugPort))
   } else {
-    if (![string]::IsNullOrWhiteSpace($env:ABLESCI_DEVTOOLS_ACTIVE_PORT)) {
-      $args += @("--active-port-file", $env:ABLESCI_DEVTOOLS_ACTIVE_PORT)
+    Start-RemoteDebugPromptApprover
+    $activePortFile = Get-SessionActivePortFile
+    if (![string]::IsNullOrWhiteSpace($activePortFile)) {
+      $args += @("--active-port-file", $activePortFile)
     }
   }
 
@@ -160,7 +176,7 @@ function Get-CookieSyncMode {
 function Get-DebugSourceMode {
   $modeRaw = $env:ABLESCI_DEBUG_SOURCE_MODE
   if ([string]::IsNullOrWhiteSpace($modeRaw)) {
-    return "managed-chrome"
+    return "session-setting"
   }
 
   switch ($modeRaw.Trim().ToLowerInvariant()) {
@@ -168,9 +184,55 @@ function Get-DebugSourceMode {
     "session-setting" { return "session-setting" }
     "off" { return "off" }
     default {
-      Log -Level "WARN" -Message "unknown ABLESCI_DEBUG_SOURCE_MODE=$modeRaw; fallback to managed-chrome"
-      return "managed-chrome"
+      Log -Level "WARN" -Message "unknown ABLESCI_DEBUG_SOURCE_MODE=$modeRaw; fallback to session-setting"
+      return "session-setting"
     }
+  }
+}
+
+function Get-SessionActivePortFile {
+  if (![string]::IsNullOrWhiteSpace($env:ABLESCI_DEVTOOLS_ACTIVE_PORT)) {
+    return $env:ABLESCI_DEVTOOLS_ACTIVE_PORT
+  }
+
+  return $defaultSessionActivePortFile
+}
+
+function Should-AutoApproveRemoteDebugPrompt {
+  if ($env:ABLESCI_AUTO_APPROVE_REMOTE_DEBUG -match "^(?i:0|false|off|no)$") {
+    return $false
+  }
+
+  return $true
+}
+
+function Start-RemoteDebugPromptApprover {
+  if (!(Should-AutoApproveRemoteDebugPrompt)) {
+    return
+  }
+
+  if (!(Test-Path -LiteralPath $approvePromptScriptPath)) {
+    Log -Level "WARN" -Message "remote debug approver script not found: $approvePromptScriptPath"
+    return
+  }
+
+  $launcher = @(Get-PythonLauncher)
+  if ($launcher.Count -eq 0) {
+    Log -Level "WARN" -Message "python launcher not found; skip remote debug auto-approve"
+    return
+  }
+
+  $command = $launcher[0]
+  $args = @()
+  if ($launcher.Count -gt 1) {
+    $args += $launcher[1..($launcher.Count - 1)]
+  }
+  $args += @($approvePromptScriptPath, "--timeout-seconds", "20", "--poll-seconds", "0.2")
+
+  try {
+    Start-Process -FilePath $command -ArgumentList $args -WindowStyle Hidden | Out-Null
+  } catch {
+    Log -Level "WARN" -Message "failed to start remote debug auto-approve helper: $($_.Exception.Message)"
   }
 }
 
